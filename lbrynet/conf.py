@@ -8,7 +8,7 @@ import yaml
 import envparse
 from appdirs import user_data_dir, user_config_dir
 from lbrynet.core import utils
-from lbrynet.core.Error import InvalidCurrencyError
+from lbrynet.core.Error import InvalidCurrencyError, NoSuchDirectoryError
 from lbrynet.androidhelpers.paths import (
     android_internal_storage_dir,
     android_app_internal_storage_dir
@@ -392,9 +392,15 @@ class Config(object):
         if name in self._fixed_defaults:
             raise ValueError('{} is not an editable setting'.format(name))
 
-    def _validate_currency(self, currency):
-        if currency not in self._fixed_defaults['CURRENCIES'].keys():
-            raise InvalidCurrencyError(currency)
+    def _assert_valid_setting_value(self, name, value):
+        if name == "max_key_fee":
+            currency = str(value["currency"]).upper()
+            if currency not in self._fixed_defaults['CURRENCIES'].keys():
+                raise InvalidCurrencyError(currency)
+        elif name == "download_directory":
+            directory = str(value)
+            if not os.path.exists(directory):
+                raise NoSuchDirectoryError(directory)
 
     def is_default(self, name):
         """Check if a config value is wasn't specified by the user
@@ -455,11 +461,9 @@ class Config(object):
         data types (e.g. PERSISTED values to save to a file, CLI values from parsed
         command-line options, etc), you can specify that with the data_types param
         """
-        if name == "max_key_fee":
-            currency = str(value["currency"]).upper()
-            self._validate_currency(currency)
-
         self._assert_editable_setting(name)
+        self._assert_valid_setting_value(name, value)
+
         for data_type in data_types:
             self._assert_valid_data_type(data_type)
             self._data[data_type][name] = value
@@ -505,6 +509,10 @@ class Config(object):
                 converted[k] = v
         return converted
 
+    def initialize_post_conf_load(self):
+        settings.installation_id = settings.get_installation_id()
+        settings.node_id = settings.get_node_id()
+
     def load_conf_file_settings(self):
         if conf_file:
             path = conf_file
@@ -523,6 +531,9 @@ class Config(object):
             self._data[TYPE_PERSISTED].update(self._convert_conf_file_lists(decoded))
         except (IOError, OSError) as err:
             log.info('%s: Failed to update settings from %s', err, path)
+
+        #initialize members depending on config file
+        self.initialize_post_conf_load()
 
     def _fix_old_conf_file_settings(self, settings_dict):
         if 'API_INTERFACE' in settings_dict:
@@ -624,7 +635,5 @@ def initialize_settings(load_conf_file=True):
     if settings is None:
         settings = Config(FIXED_SETTINGS, ADJUSTABLE_SETTINGS,
                           environment=get_default_env())
-        settings.installation_id = settings.get_installation_id()
-        settings.node_id = settings.get_node_id()
         if load_conf_file:
             settings.load_conf_file_settings()
